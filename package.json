@@ -1,0 +1,13 @@
+{
+  "name": "40fps-gang-bot",
+  "version": "3.0.0",
+  "description": "40 FPS Gang Discord Bot - server setup, leave approval, Kind of Loop evidence and leaderboard",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.24.2",
+    "dotenv": "^16.6.1"
+  }
+}
