@@ -1,0 +1,13 @@
+{
+  "members": [],
+  "welfare": {},
+  "peak": {},
+  "leaves": {},
+  "stories": [],
+  "bank": {
+    "balance": 0,
+    "ledger": []
+  },
+  "loop": {},
+  "settings": {}
+}

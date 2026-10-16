@@ -1,735 +1,304 @@
-require("dotenv").config();
-const fs = require("fs");
-const path = require("path");
-
+const fs = require("node:fs");
+const path = require("node:path");
 const {
-  Client,
-  GatewayIntentBits,
-  REST,
-  Routes,
-  SlashCommandBuilder,
-  EmbedBuilder,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  ModalBuilder,
-  TextInputBuilder,
-  TextInputStyle,
-  StringSelectMenuBuilder,
-  StringSelectMenuOptionBuilder,
-  PermissionFlagsBits,
-  ChannelType,
-  OverwriteType
+  Client, GatewayIntentBits, Partials, REST, Routes,
+  SlashCommandBuilder, ChannelType, PermissionFlagsBits,
+  EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
+  StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle
 } = require("discord.js");
+const cfg = require("./config");
+
+if (!cfg.token || !cfg.clientId || !cfg.guildId) {
+  console.error("ตั้งค่า DISCORD_TOKEN, CLIENT_ID และ GUILD_ID ใน .env ก่อน");
+  process.exit(1);
+}
+
+const DATA_DIR = path.join(__dirname, "..", "data");
+const DB_PATH = path.join(DATA_DIR, "db.json");
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+const emptyDb = () => ({ members: [], welfare: {}, peak: {}, leaves: {}, stories: [], bank: { balance: 0, ledger: [] }, loop: {}, settings: {} });
+function loadDb() {
+  try { return { ...emptyDb(), ...JSON.parse(fs.readFileSync(DB_PATH, "utf8")) }; }
+  catch { return emptyDb(); }
+}
+let db = loadDb();
+function saveDb() { fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2)); }
+
+const categories = [
+  { name: "🏠・LOBBY", channels: [
+    ["📌・ประกาศแก๊ง", "text"], ["👥・รายชื่อสมาชิก-40-fps", "text"],
+    ["🤖・แผงควบคุมบอท", "text"], ["💬・พูดคุยทั่วไป", "text"]
+  ]},
+  { name: "👤・MEMBER", channels: [
+    ["📥・สมัครเข้าแก๊ง", "text"], ["📋・ทะเบียนสมาชิก", "text"], ["📨・แจ้งเข้า-ออกแก๊ง", "text"]
+  ]},
+  { name: "📖・STORY", channels: [
+    ["📋・สำรวจคนเล่นสตอรี่", "text"], ["📅・ตารางนัดสตอรี่", "text"], ["🔔・แจ้งเตือนสตอรี่", "text"]
+  ]},
+  { name: "🛠️・CRAFT", channels: [
+    ["🧰・รายการคราฟต์", "text"], ["📝・ลงทะเบียนคราฟต์", "text"], ["📆・นัดหมายคราฟต์", "text"]
+  ]},
+  { name: "🎒・WELFARE", channels: [
+    ["📦・ทะเบียนสวัสดิการ", "text"], ["📊・สรุปสวัสดิการ", "text"], ["🛡️・จัดการสวัสดิการ", "text"]
+  ]},
+  { name: "⏰・PEAK-TIME", channels: [
+    ["✅・เช็กชื่อพีคไทม์", "text"], ["📝・แจ้งลาพีคไทม์", "text"],
+    ["📊・สรุปพีคไทม์", "text"], ["🔔・แจ้งเตือนพีคไทม์", "text"]
+  ]},
+  { name: "💰・GANG-BANK", channels: [
+    ["🏦・บัญชีแก๊ง", "text"], ["📒・รายการรับ-จ่าย", "text"],
+    ["💵・ยอดส่งเงินแก๊ง", "text"], ["📊・สรุปการเงิน", "text"]
+  ]},
+  { name: "🏆・KING-OF-LOOP", channels: [
+    ["📊・คะแนน-kind-of-loop", "text"], ["📸・หลักฐาน-kind-of-loop", "text"], ["🔄・รีเซ็ตคะแนน", "text"]
+  ]},
+  { name: "👑・MANAGEMENT", channels: [
+    ["🎛️・แผงจัดการแก๊ง", "text"], ["📜・บันทึกการทำงานบอท", "text"], ["⚙️・ตั้งค่าระบบ", "text"]
+  ]}
+];
+
+const welfareItems = ["ไม้", "มีด", "รถ", "รถนั่ง 4", "รถ GTB", "โล", "สกินไม้"];
+const commands = [
+  new SlashCommandBuilder().setName("setup-40fps").setDescription("สร้างหมวดและห้องระบบ 40 FPS"),
+  new SlashCommandBuilder().setName("panel-40fps").setDescription("ส่งแผงปุ่มระบบ 40 FPS"),
+  new SlashCommandBuilder().setName("รายงานพีคไทม์").setDescription("ดูรายงานเช็กชื่อพีคไทม์วันนี้")
+].map(c => c.toJSON());
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages],
+  partials: [Partials.Channel]
 });
 
-const COLORS = {
-  leader: 0xF1C40F,
-  coleader: 0x9B59B6,
-  underboss: 0xE74C3C,
-  captain: 0xE67E22,
-  senior: 0x3498DB,
-  member: 0x2ECC71,
-  trial: 0x95A5A6,
-  alliance: 0x1ABC9C,
-  visitor: 0x7F8C8D,
-  staff: 0x5865F2
-};
-
-const ROLE_NAMES = [
-  ["👑 GANG LEADER", COLORS.leader],
-  ["💎 CO-LEADER", COLORS.coleader],
-  ["🔥 UNDERBOSS", COLORS.underboss],
-  ["⚔️ CAPTAIN", COLORS.captain],
-  ["🛡️ SENIOR MEMBER", COLORS.senior],
-  ["🔫 MEMBER", COLORS.member],
-  ["🌱 TRIAL MEMBER", COLORS.trial],
-  ["🤝 ALLIANCE", COLORS.alliance],
-  ["👤 VISITOR", COLORS.visitor],
-  ["🛡️ STAFF", COLORS.staff]
-];
-
-const LEAVE_TYPES = {
-  late: "🟢 ลาเข้าเมืองสาย",
-  partial: "🟡 ลาบางช่วงเวลา",
-  absent: "🔴 ลาไม่เข้าเมือง",
-  business: "🔵 ลาธุระ",
-  emergency: "⚫ ลาฉุกเฉิน"
-};
-
-const LEADER_ROLE_NAMES = new Set([
-  "👑 GANG LEADER",
-  "💎 CO-LEADER",
-  "🔥 UNDERBOSS",
-  "⚔️ CAPTAIN",
-  "🛡️ SENIOR MEMBER",
-  "🛡️ STAFF"
-]);
-
-const commandData = [
-  new SlashCommandBuilder()
-    .setName("setup-server")
-    .setDescription("สร้างโครงสร้าง Discord 40 FPS อัตโนมัติ")
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .toJSON(),
-  new SlashCommandBuilder()
-    .setName("setup-leave")
-    .setDescription("ติดตั้ง/ส่งแผงระบบลา 40 FPS")
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .toJSON(),
-  new SlashCommandBuilder()
-    .setName("setup-loop")
-    .setDescription("ติดตั้งระบบ Kind of Loop และตารางคะแนน")
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .toJSON(),
-  new SlashCommandBuilder()
-    .setName("kind-of-loop")
-    .setDescription("ส่งหลักฐาน Kind of Loop และรับ 1 คะแนนต่อคน")
-    .addIntegerOption(option => option
-      .setName("people")
-      .setDescription("จำนวนคนในหลักฐาน (1 คน = 1 คะแนน)")
-      .setRequired(true)
-      .setMinValue(1)
-      .setMaxValue(50))
-    .addAttachmentOption(option => option
-      .setName("evidence")
-      .setDescription("รูปภาพหลักฐาน Kind of Loop")
-      .setRequired(true))
-    .addStringOption(option => option
-      .setName("names")
-      .setDescription("ชื่อ IC ของคนที่ร่วม (คั่นด้วย , )")
-      .setRequired(false)
-      .setMaxLength(1000))
-    .toJSON(),
-  new SlashCommandBuilder()
-    .setName("score")
-    .setDescription("ดูคะแนน Kind of Loop ของตัวเอง")
-    .toJSON(),
-  new SlashCommandBuilder()
-    .setName("leaderboard")
-    .setDescription("ดูตารางคะแนน Kind of Loop")
-    .toJSON()
-];
-
-function safeName(name) {
-  return name.toLowerCase();
-}
-
-async function findOrCreateRole(guild, name, color) {
-  let role = guild.roles.cache.find(r => r.name === name);
-  if (!role) {
-    role = await guild.roles.create({
-      name,
-      color,
-      reason: "40 FPS Gang Bot setup"
-    });
-  }
-  return role;
-}
-
-async function findOrCreateCategory(guild, name, overwrites = []) {
-  let category = guild.channels.cache.find(
-    c => c.type === ChannelType.GuildCategory && c.name === name
-  );
-  if (!category) {
-    category = await guild.channels.create({
-      name,
-      type: ChannelType.GuildCategory,
-      permissionOverwrites: overwrites
-    });
-  } else if (overwrites.length) {
-    await category.permissionOverwrites.set(overwrites);
-  }
-  return category;
-}
-
-async function findOrCreateText(guild, name, parent, overwrites = []) {
-  let channel = guild.channels.cache.find(
-    c => c.type === ChannelType.GuildText &&
-      c.name === name &&
-      c.parentId === parent.id
-  );
-  if (!channel) {
-    channel = await guild.channels.create({
-      name,
-      type: ChannelType.GuildText,
-      parent: parent.id,
-      permissionOverwrites: overwrites
-    });
-  } else if (overwrites.length) {
-    await channel.permissionOverwrites.set(overwrites);
-  }
-  return channel;
-}
-
-async function findOrCreateVoice(guild, name, parent, overwrites = []) {
-  let channel = guild.channels.cache.find(
-    c => c.type === ChannelType.GuildVoice &&
-      c.name === name &&
-      c.parentId === parent.id
-  );
-  if (!channel) {
-    channel = await guild.channels.create({
-      name,
-      type: ChannelType.GuildVoice,
-      parent: parent.id,
-      permissionOverwrites: overwrites
-    });
-  } else if (overwrites.length) {
-    await channel.permissionOverwrites.set(overwrites);
-  }
-  return channel;
-}
-
-function allowText(roleId, extra = {}) {
-  return {
-    id: roleId,
-    type: OverwriteType.Role,
-    allow: [
-      PermissionFlagsBits.ViewChannel,
-      PermissionFlagsBits.SendMessages,
-      PermissionFlagsBits.ReadMessageHistory,
-      PermissionFlagsBits.EmbedLinks,
-      ...extra.allow || []
-    ],
-    deny: extra.deny || []
-  };
-}
-
-function denyView(roleId) {
-  return {
-    id: roleId,
-    type: OverwriteType.Role,
-    deny: [PermissionFlagsBits.ViewChannel]
-  };
-}
-
-function allowView(roleId) {
-  return {
-    id: roleId,
-    type: OverwriteType.Role,
-    allow: [PermissionFlagsBits.ViewChannel]
-  };
-}
-
-const DATA_DIR = path.join(__dirname, "data");
-const SCORE_FILE = path.join(DATA_DIR, "kind-of-loop-scores.json");
-
-function ensureScoreStore() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-  if (!fs.existsSync(SCORE_FILE)) fs.writeFileSync(SCORE_FILE, "{}", "utf8");
-}
-
-function loadScores() {
-  ensureScoreStore();
-  try { return JSON.parse(fs.readFileSync(SCORE_FILE, "utf8")); }
-  catch { return {}; }
-}
-
-function saveScores(scores) {
-  ensureScoreStore();
-  fs.writeFileSync(SCORE_FILE, JSON.stringify(scores, null, 2), "utf8");
-}
-
-function addScore(userId, username, points, names, evidenceUrl, messageUrl) {
-  const scores = loadScores();
-  const current = scores[userId] || { username, points: 0, submissions: 0, lastSubmission: null };
-  current.username = username;
-  current.points += points;
-  current.submissions += 1;
-  current.lastSubmission = new Date().toISOString();
-  current.lastEvidenceUrl = evidenceUrl;
-  current.lastNames = names || "";
-  current.lastMessageUrl = messageUrl || "";
-  scores[userId] = current;
-  saveScores(scores);
-  return current;
-}
-
-function getLeaderboard(limit = 10) {
-  return Object.entries(loadScores())
-    .map(([userId, data]) => ({ userId, ...data }))
-    .sort((a, b) => b.points - a.points || b.submissions - a.submissions)
-    .slice(0, limit);
-}
-
-function loopChannels(guild) {
-  return {
-    evidence: guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.name === "🏆・หลักฐาน-kind-of-loop"),
-    scores: guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.name === "📊・คะแนน-kind-of-loop")
-  };
-}
-
-async function setupLoop(guild) {
-  const gang = guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name === "🔥 GANG");
-  const parent = gang || null;
-  const evidence = await findOrCreateText(guild, "🏆・หลักฐาน-kind-of-loop", parent || await findOrCreateCategory(guild, "🏆 KIND OF LOOP"));
-  const scores = await findOrCreateText(guild, "📊・คะแนน-kind-of-loop", parent || await findOrCreateCategory(guild, "🏆 KIND OF LOOP"));
-
-  const recent = await scores.messages.fetch({ limit: 20 }).catch(() => null);
-  const already = recent && recent.some(m => m.author.id === client.user.id && m.embeds?.some(e => e.title?.includes("ตารางคะแนน Kind of Loop")));
-  if (!already) {
-    await scores.send({ embeds: [new EmbedBuilder()
-      .setTitle("🏆 ตารางคะแนน Kind of Loop | 40 FPS GANG")
-      .setDescription("**กติกา:** 1 คน = 1 คะแนน\n\nส่งหลักฐานด้วยคำสั่ง `/kind-of-loop` โดยแนบรูปภาพและระบุจำนวนคน\n\nดูคะแนนตัวเอง: `/คะแนน`\nดูอันดับ: `/leaderboard`")
-      .setFooter({ text: "40 FPS GANG • Kind of Loop Score System" })] });
-  }
-  return { evidence, scores };
-}
-
-async function getSetup(guild) {
-  const roles = {};
-  for (const [name] of ROLE_NAMES) {
-    roles[name] = await findOrCreateRole(guild, name, COLORS[name] || undefined);
-  }
-
-  const everyone = guild.roles.everyone;
-  const memberRole = roles["🔫 MEMBER"];
-  const trialRole = roles["🌱 TRIAL MEMBER"];
-  const allianceRole = roles["🤝 ALLIANCE"];
-  const visitorRole = roles["👤 VISITOR"];
-  const staffRole = roles["🛡️ STAFF"];
-
-  const memberAccess = [
-    allowView(memberRole.id),
-    allowView(trialRole.id),
-    allowView(allianceRole.id)
-  ];
-  const staffAccess = [allowView(staffRole.id)];
-
-  const info = await findOrCreateCategory(guild, "📌 INFORMATION", [
-    allowView(everyone.id)
-  ]);
-  await findOrCreateText(guild, "📜・กฎแก๊ง", info);
-  await findOrCreateText(guild, "📢・ประกาศ", info);
-  await findOrCreateText(guild, "🎖️・ยศและหน้าที่", info);
-  await findOrCreateText(guild, "📋・รายชื่อสมาชิก", info);
-
-  const recruitment = await findOrCreateCategory(guild, "📝 RECRUITMENT", [
-    allowView(everyone.id)
-  ]);
-  await findOrCreateText(guild, "🎫・สมัครเข้าแก๊ง", recruitment);
-  await findOrCreateText(guild, "📋・ผลการสมัคร", recruitment);
-
-  const gang = await findOrCreateCategory(guild, "🔥 GANG", [
-    ...memberAccess,
-    denyView(visitorRole.id)
-  ]);
-  await findOrCreateText(guild, "💬・ห้องแก๊ง", gang);
-  await findOrCreateText(guild, "📢・คำสั่งแก๊ง", gang);
-  await findOrCreateText(guild, "🎯・ภารกิจ", gang);
-  await findOrCreateText(guild, "🏆・กิจกรรม", gang);
-
-  const peak = await findOrCreateCategory(guild, "⏰ PEAK TIME", [
-    ...memberAccess,
-    denyView(visitorRole.id)
-  ]);
-  const leaveChannel = await findOrCreateText(guild, "📋・ลาไม่เข้าเมือง", peak);
-  await findOrCreateText(guild, "📊・สรุปการลา", peak);
-
-  const territory = await findOrCreateCategory(guild, "🗺️ TERRITORY", [
-    ...memberAccess,
-    denyView(visitorRole.id)
-  ]);
-  await findOrCreateText(guild, "📍・พื้นที่แก๊ง", territory);
-  await findOrCreateText(guild, "⚔️・สงครามแก๊ง", territory);
-  await findOrCreateText(guild, "🤝・พันธมิตร", territory);
-  await findOrCreateText(guild, "☠️・ศัตรู", territory);
-
-  const staff = await findOrCreateCategory(guild, "🛡️ STAFF", [
-    ...staffAccess,
-    ...[
-      "👑 GANG LEADER",
-      "💎 CO-LEADER",
-      "🔥 UNDERBOSS",
-      "⚔️ CAPTAIN"
-    ].map(n => allowView(roles[n].id)),
-    denyView(everyone.id)
-  ]);
-  const review = await findOrCreateText(guild, "🔍・ตรวจสอบการลา", staff);
-  await findOrCreateText(guild, "📋・จัดการสมาชิก", staff);
-  const log = await findOrCreateText(guild, "📑・LOG", staff);
-
-  const voice = await findOrCreateCategory(guild, "🔊 VOICE", [
-    ...memberAccess,
-    denyView(visitorRole.id)
-  ]);
-  const voiceOverwrites = [
-    ...memberAccess.map(x => ({
-      ...x,
-      allow: [
-        PermissionFlagsBits.ViewChannel,
-        PermissionFlagsBits.Connect,
-        PermissionFlagsBits.Speak
-      ],
-      deny: []
-    }))
-  ];
-  await findOrCreateVoice(guild, "🔊 Lobby", voice, voiceOverwrites);
-  await findOrCreateVoice(guild, "🔥 รวมพล", voice, voiceOverwrites);
-  await findOrCreateVoice(guild, "🎯 ภารกิจ", voice, voiceOverwrites);
-  await findOrCreateVoice(guild, "💤 AFK", voice, voiceOverwrites);
-
-  return { roles, leaveChannel, review, log };
-}
-
-async function sendLeavePanel(channel) {
-  const recent = await channel.messages.fetch({ limit: 20 });
-  const already = recent.some(m =>
-    m.author.id === client.user.id &&
-    m.components?.some(row =>
-      row.components?.some(c => c.customId === "open_leave_type")
-    )
-  );
-  if (already) return;
-
-  const embed = new EmbedBuilder()
-    .setTitle("📋 ระบบลาไม่เข้าเมือง | 40 FPS GANG")
-    .setDescription(
-      "⏰ **PEAK TIME : 19:00–00:00 น.**\n\n" +
-      "หากไม่สามารถเข้าเมืองได้ตามปกติ กรุณาแจ้งลาผ่านระบบด้านล่าง\n\n" +
-      "เลือกประเภทการลา แล้วกรอกข้อมูลให้ครบถ้วน\n\n" +
-      "🟢 ลาเข้าเมืองสาย\n" +
-      "🟡 ลาบางช่วงเวลา\n" +
-      "🔴 ลาไม่เข้าเมือง\n" +
-      "🔵 ลาธุระ\n" +
-      "⚫ ลาฉุกเฉิน\n\n" +
-      "⚠️ หากเป็นเหตุฉุกเฉิน ให้แจ้งโดยเร็วที่สุด"
-    )
-    .setFooter({ text: "40 FPS GANG • Leave System" });
-
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId("open_leave_type")
-      .setLabel("📝 แจ้งลาเข้าเมือง")
-      .setStyle(ButtonStyle.Primary)
-  );
-
-  await channel.send({ embeds: [embed], components: [row] });
-}
-
-async function setupLeave(guild) {
-  const setup = await getSetup(guild);
-  await sendLeavePanel(setup.leaveChannel);
-  return setup;
-}
-
-function hasStaffAccess(member) {
+function isManager(member) {
   if (!member) return false;
-  if (member.permissions.has(PermissionFlagsBits.Administrator)) return true;
-  return member.roles.cache.some(role => LEADER_ROLE_NAMES.has(role.name));
+  return member.permissions.has(PermissionFlagsBits.Administrator) ||
+    member.roles.cache.some(r => cfg.ownerRoleNames.includes(r.name));
+}
+function todayKey() {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: cfg.timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+}
+function panelEmbed() {
+  return new EmbedBuilder().setColor(0x5B45D6).setTitle("💜 40 FPS GANG — CONTROL PANEL")
+    .setDescription("เลือกปุ่มด้านล่างเพื่อเปิดใช้งานระบบของแก๊ง\n\n⏰ พีคไทม์ 18:00–00:00\n🎒 สวัสดิการ 7 ประเภท\n💰 บัญชีแก๊งและ 🏆 King of Loop")
+    .setFooter({ text: "40 FPS Gang Bot • ข้อมูลบันทึกในระบบของเซิร์ฟเวอร์" });
+}
+function mainRows() {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("welfare_open").setLabel("🎒 สวัสดิการ").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId("peak_checkin").setLabel("✅ เช็กพีคไทม์").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId("leave_open").setLabel("📝 แจ้งลา").setStyle(ButtonStyle.Secondary)
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("story_open").setLabel("📖 สร้าง/ร่วมสตอรี่").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId("bank_view").setLabel("💰 ดูบัญชีแก๊ง").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId("loop_open").setLabel("🏆 King of Loop").setStyle(ButtonStyle.Primary)
+    )
+  ];
+}
+async function findTextChannel(guild, channelName) {
+  return guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.name === channelName);
+}
+async function setupGuild(guild) {
+  await guild.channels.fetch();
+  for (const category of categories) {
+    let parent = guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name === category.name);
+    if (!parent) parent = await guild.channels.create({ name: category.name, type: ChannelType.GuildCategory });
+    for (const [name] of category.channels) {
+      const exists = guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.name === name && c.parentId === parent.id);
+      if (!exists) await guild.channels.create({ name, type: ChannelType.GuildText, parent: parent.id });
+    }
+  }
+  const panelChannel = await findTextChannel(guild, "🤖・แผงควบคุมบอท");
+  if (panelChannel) await panelChannel.send({ embeds: [panelEmbed()], components: mainRows() });
+  const welfareChannel = await findTextChannel(guild, "📦・ทะเบียนสวัสดิการ");
+  if (welfareChannel) await welfareChannel.send({ embeds: [new EmbedBuilder().setColor(0x36A269).setTitle("🎒 ทะเบียนสวัสดิการ 40 FPS").setDescription("เลือกประเภทรายการเพื่อดู/ลงทะเบียนครอบครอง")], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId("welfare_open").setLabel("เปิดทะเบียนสวัสดิการ").setStyle(ButtonStyle.Success))] });
+  const peakChannel = await findTextChannel(guild, "✅・เช็กชื่อพีคไทม์");
+  if (peakChannel) await peakChannel.send({ embeds: [new EmbedBuilder().setColor(0xE5A33D).setTitle("⏰ เช็กชื่อพีคไทม์").setDescription("ช่วงเวลา 18:00–00:00 กดปุ่มเมื่อเข้าเวลา")], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId("peak_checkin").setLabel("✅ เช็กชื่อวันนี้").setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId("leave_open").setLabel("📝 แจ้งลา").setStyle(ButtonStyle.Secondary))] });
+  const storyChannel = await findTextChannel(guild, "📋・สำรวจคนเล่นสตอรี่");
+  if (storyChannel) await storyChannel.send({ embeds: [new EmbedBuilder().setColor(0x7C5CE7).setTitle("📖 สำรวจคนเล่นสตอรี่").setDescription("สร้างแบบสำรวจสตอรี่ หรือกดเข้าร่วมแบบสำรวจล่าสุด")], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId("story_open").setLabel("📖 สร้างสตอรี่").setStyle(ButtonStyle.Primary), new ButtonBuilder().setCustomId("story_join").setLabel("🙋 เข้าร่วมล่าสุด").setStyle(ButtonStyle.Success))] });
+  const bankChannel = await findTextChannel(guild, "🏦・บัญชีแก๊ง");
+  if (bankChannel) await bankChannel.send({ embeds: [new EmbedBuilder().setColor(0xD4AC0D).setTitle("💰 บัญชีแก๊ง").setDescription("ดูยอดคงเหลือ หรือเพิ่ม/หักเงิน (หัวหน้าและรองหัวหน้า)")], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId("bank_view").setLabel("ดูยอดเงิน").setStyle(ButtonStyle.Secondary), new ButtonBuilder().setCustomId("bank_add").setLabel("เพิ่มเงิน").setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId("bank_subtract").setLabel("หักเงิน").setStyle(ButtonStyle.Danger))] });
+  const loopChannel = await findTextChannel(guild, "📊・คะแนน-kind-of-loop");
+  if (loopChannel) await loopChannel.send({ embeds: [new EmbedBuilder().setColor(0xC084FC).setTitle("🏆 King of Loop").setDescription("เพิ่มคะแนนให้สมาชิกและดูตารางคะแนน")], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId("loop_open").setLabel("เพิ่มคะแนน").setStyle(ButtonStyle.Primary), new ButtonBuilder().setCustomId("loop_view").setLabel("ดูคะแนน").setStyle(ButtonStyle.Secondary), new ButtonBuilder().setCustomId("loop_reset").setLabel("รีเซ็ตคะแนน").setStyle(ButtonStyle.Danger))] });
+}
+function welfareSelect() {
+  return new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId("welfare_select").setPlaceholder("เลือกประเภทสวัสดิการ").addOptions(welfareItems.map(x => ({ label: x, value: x }))));
+}
+function memberSelect(customId, placeholder, guild) {
+  const members = guild.members.cache.filter(m => !m.user.bot).first(25);
+  const options = members.map(m => ({ label: m.displayName.slice(0, 100), value: m.id }));
+  if (!options.length) options.push({ label: "ไม่พบสมาชิก", value: "none" });
+  return new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(customId).setPlaceholder(placeholder).addOptions(options));
+}
+function amountModal(customId, title, amountLabel, noteLabel = "หมายเหตุ") {
+  const modal = new ModalBuilder().setCustomId(customId).setTitle(title);
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("amount").setLabel(amountLabel).setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(15)),
+    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("note").setLabel(noteLabel).setStyle(TextInputStyle.Short).setRequired(false).setMaxLength(100))
+  );
+  return modal;
+}
+async function sendMemberDMs(guild, text) {
+  const role = guild.roles.cache.find(r => r.name === cfg.memberRoleName);
+  if (!role) return { ok: 0, failed: 0, reason: `ไม่พบ role ${cfg.memberRoleName}` };
+  let ok = 0, failed = 0;
+  for (const member of role.members.values()) {
+    try { await member.send(text); ok++; } catch { failed++; }
+  }
+  return { ok, failed };
 }
 
 client.once("ready", async () => {
-  console.log(`Logged in as ${client.user.tag}`);
+  console.log(`Ready as ${client.user.tag}`);
+  try {
+    const rest = new REST({ version: "10" }).setToken(cfg.token);
+    await rest.put(Routes.applicationGuildCommands(cfg.clientId, cfg.guildId), { body: commands });
+    console.log("Guild slash commands registered");
+  } catch (e) { console.error("Register commands failed:", e.message); }
+});
 
-  const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
-  const guildId = process.env.GUILD_ID;
-
-  if (guildId) {
-    await rest.put(
-      Routes.applicationGuildCommands(client.user.id, guildId),
-      { body: commandData }
-    );
-    console.log("Guild slash commands registered.");
-  } else {
-    console.log("GUILD_ID not set. Commands were not registered.");
-  }
+client.on("guildMemberAdd", async member => {
+  try {
+    const role = member.guild.roles.cache.find(r => r.name === cfg.memberRoleName);
+    if (role) await member.roles.add(role);
+    await sendMemberDMs(member.guild, `🎉 สมาชิกใหม่เข้าร่วม 40 FPS: ${member.user.tag}`);
+  } catch (e) { console.error("guildMemberAdd:", e.message); }
 });
 
 client.on("interactionCreate", async interaction => {
   try {
     if (interaction.isChatInputCommand()) {
-      if (interaction.commandName === "setup-server") {
-        if (!interaction.memberPermissions.has(PermissionFlagsBits.Administrator)) {
-          return interaction.reply({ content: "❌ ต้องเป็น Administrator เท่านั้น", ephemeral: true });
-        }
-
+      if (interaction.commandName === "setup-40fps") {
+        if (!isManager(interaction.member)) return interaction.reply({ content: "เฉพาะหัวหน้า/รองหัวหน้าเท่านั้น", ephemeral: true });
         await interaction.deferReply({ ephemeral: true });
-        const setup = await setupLeave(interaction.guild);
-        const loop = await setupLoop(interaction.guild);
+        await setupGuild(interaction.guild);
+        return interaction.editReply("✅ สร้างหมวด/ห้องที่ยังไม่มี และส่งแผงปุ่มพื้นฐานแล้ว");
+      }
+      if (interaction.commandName === "panel-40fps") {
+        if (!isManager(interaction.member)) return interaction.reply({ content: "เฉพาะหัวหน้า/รองหัวหน้าเท่านั้น", ephemeral: true });
+        return interaction.reply({ embeds: [panelEmbed()], components: mainRows() });
+      }
+      if (interaction.commandName === "รายงานพีคไทม์") {
+        const day = todayKey(), data = db.peak[day] || {};
+        const names = Object.entries(data).map(([id, v]) => `<@${id}> — ${v.time}`).join("\n") || "ยังไม่มีผู้เช็กชื่อ";
+        return interaction.reply({ embeds: [new EmbedBuilder().setTitle(`📊 รายงานพีคไทม์ ${day}`).setDescription(names)] , ephemeral: true });
+      }
+    }
 
-        await interaction.editReply(
-          "✅ **ติดตั้ง 40 FPS Server สำเร็จ**\n\n" +
-          `📋 ระบบลา: <#${setup.leaveChannel.id}>\n` +
-          `🔍 ตรวจสอบใบลา: <#${setup.review.id}>\n` +
-          `📑 LOG: <#${setup.log.id}>\n` +
-          `🏆 หลักฐาน Kind of Loop: <#${loop.evidence.id}>\n` +
-          `📊 ตารางคะแนน: <#${loop.scores.id}>\n\n` +
-          "ถ้าบอทสร้างยศแล้ว ให้ลากยศของ Bot ให้อยู่เหนือยศแก๊งใน Server Settings → Roles"
+    if (interaction.isButton()) {
+      const id = interaction.customId;
+      if (id === "welfare_open") return interaction.reply({ content: "เลือกประเภทสวัสดิการ แล้วกดปุ่มลงทะเบียน/ยกเลิก", components: [welfareSelect()], ephemeral: true });
+      if (id === "peak_checkin") {
+        const day = todayKey();
+        db.peak[day] ||= {};
+        db.peak[day][interaction.user.id] = { time: new Date().toLocaleTimeString("th-TH", { timeZone: cfg.timezone }) };
+        saveDb();
+        return interaction.reply({ content: `✅ เช็กชื่อพีคไทม์แล้ว (${day})`, ephemeral: true });
+      }
+      if (id === "leave_open") {
+        const modal = new ModalBuilder().setCustomId("leave_submit").setTitle("แจ้งลาพีคไทม์");
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("reason").setLabel("เหตุผล/ประเภทการลา").setStyle(TextInputStyle.Short).setRequired(true)),
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("duration").setLabel("เวลาที่คาดว่าจะลา").setStyle(TextInputStyle.Short).setRequired(true)),
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("contact").setLabel("ช่องทางติดต่อเพิ่มเติม (ถ้ามี)").setStyle(TextInputStyle.Short).setRequired(false))
         );
-        return;
+        return interaction.showModal(modal);
       }
-
-      if (interaction.commandName === "setup-loop") {
-        if (!interaction.memberPermissions.has(PermissionFlagsBits.Administrator)) {
-          return interaction.reply({ content: "❌ ต้องเป็น Administrator เท่านั้น", ephemeral: true });
-        }
-        await interaction.deferReply({ ephemeral: true });
-        const loop = await setupLoop(interaction.guild);
-        await interaction.editReply(`✅ ติดตั้งระบบ Kind of Loop แล้ว\n🏆 หลักฐาน: <#${loop.evidence.id}>\n📊 ตารางคะแนน: <#${loop.scores.id}>`);
-        return;
-      }
-
-      if (interaction.commandName === "setup-leave") {
-        if (!interaction.memberPermissions.has(PermissionFlagsBits.Administrator)) {
-          return interaction.reply({ content: "❌ ต้องเป็น Administrator เท่านั้น", ephemeral: true });
-        }
-
-        await interaction.deferReply({ ephemeral: true });
-        const setup = await setupLeave(interaction.guild);
-        await interaction.editReply(`✅ ติดตั้งระบบลาแล้วที่ <#${setup.leaveChannel.id}>`);
-        return;
-      }
-    }
-
-    if (interaction.isChatInputCommand() && interaction.commandName === "kind-of-loop") {
-      const people = interaction.options.getInteger("people", true);
-      const evidence = interaction.options.getAttachment("evidence", true);
-      const names = interaction.options.getString("names") || "";
-
-      if (!evidence.contentType?.startsWith("image/")) {
-        return interaction.reply({ content: "❌ กรุณาแนบไฟล์รูปภาพเท่านั้น", ephemeral: true });
-      }
-
-      const { evidence: evidenceChannel, scores: scoresChannel } = await setupLoop(interaction.guild);
-      const entry = addScore(interaction.user.id, interaction.user.tag, people, names, evidence.url, null);
-      const rank = getLeaderboard(100).findIndex(x => x.userId === interaction.user.id) + 1;
-
-      const embed = new EmbedBuilder()
-        .setTitle("🎯 Kind of Loop • หลักฐานใหม่")
-        .setDescription(`👤 ผู้ส่ง: ${interaction.user}\n👥 จำนวนคน: **${people} คน**\n⭐ ได้รับคะแนน: **+${people} คะแนน**\n🏆 คะแนนสะสม: **${entry.points} คะแนน**`)
-        .addFields(
-          { name: "👥 รายชื่อ IC", value: names || "ไม่ได้ระบุ", inline: false },
-          { name: "📸 หลักฐาน", value: `[เปิดรูปหลักฐาน](${evidence.url})`, inline: false },
-          { name: "🏅 อันดับปัจจุบัน", value: rank > 0 ? `#${rank}` : "-", inline: true }
-        )
-        .setImage(evidence.url)
-        .setFooter({ text: "40 FPS GANG • Kind of Loop • 1 คน = 1 คะแนน" })
-        .setTimestamp();
-
-      const msg = await evidenceChannel.send({ content: `${interaction.user} ส่งหลักฐาน Kind of Loop`, embeds: [embed] });
-      entry.lastMessageUrl = msg.url;
-      const scores = loadScores();
-      scores[interaction.user.id] = entry;
-      saveScores(scores);
-
-      await scoresChannel.send(`⭐ <@${interaction.user.id}> ได้ **+${people} คะแนน** | คะแนนสะสม **${entry.points}** | หลักฐาน: ${msg.url}`);
-
-      await interaction.reply({
-        content: `✅ ส่งหลักฐานสำเร็จ!\n👥 ${people} คน = ⭐ +${people} คะแนน\n🏆 คะแนนสะสมของคุณ: **${entry.points} คะแนน**\n🏅 อันดับ: **#${rank}**`,
-        ephemeral: true
-      });
-      return;
-    }
-
-    if (interaction.isChatInputCommand() && interaction.commandName === "score") {
-      const data = loadScores()[interaction.user.id];
-      const rank = getLeaderboard(100).findIndex(x => x.userId === interaction.user.id) + 1;
-      return interaction.reply({
-        content: data ? `🏆 **Kind of Loop ของคุณ**\n⭐ คะแนน: **${data.points}**\n📸 จำนวนหลักฐาน: **${data.submissions} ครั้ง**\n🏅 อันดับ: **#${rank}**` : "📭 ยังไม่มีคะแนน Kind of Loop ของคุณ",
-        ephemeral: true
-      });
-    }
-
-    if (interaction.isChatInputCommand() && interaction.commandName === "leaderboard") {
-      const board = getLeaderboard(10);
-      const lines = board.length ? board.map((x, i) => `**${i + 1}.** <@${x.userId}> — ⭐ **${x.points} คะแนน** (${x.submissions} หลักฐาน)`) : ["ยังไม่มีข้อมูลคะแนน"];
-      const embed = new EmbedBuilder()
-        .setTitle("🏆 ตารางคะแนน Kind of Loop | 40 FPS GANG")
-        .setDescription(lines.join("\n"))
-        .setFooter({ text: "1 คน = 1 คะแนน • แสดง 10 อันดับแรก" })
-        .setTimestamp();
-      return interaction.reply({ embeds: [embed] });
-    }
-
-    if (interaction.isButton() && interaction.customId === "open_leave_type") {
-      const menu = new StringSelectMenuBuilder()
-        .setCustomId("leave_type_select")
-        .setPlaceholder("เลือกประเภทการลา")
-        .addOptions(
-          Object.entries(LEAVE_TYPES).map(([value, label]) =>
-            new StringSelectMenuOptionBuilder().setLabel(label.replace(/^.\s/, "")).setValue(value)
-          )
+      if (id === "story_open") {
+        const modal = new ModalBuilder().setCustomId("story_create").setTitle("สร้างแบบสำรวจสตอรี่");
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("when").setLabel("วันและเวลา").setStyle(TextInputStyle.Short).setRequired(true)),
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId("playing").setLabel("เล่นกับใคร/รายละเอียด").setStyle(TextInputStyle.Short).setRequired(true))
         );
-
-      await interaction.reply({
-        content: "📌 **เลือกประเภทการลาก่อนกรอกแบบฟอร์ม**",
-        components: [new ActionRowBuilder().addComponents(menu)],
-        ephemeral: true
-      });
-      return;
-    }
-
-    if (interaction.isStringSelectMenu() && interaction.customId === "leave_type_select") {
-      const type = interaction.values[0];
-      const modal = new ModalBuilder()
-        .setCustomId(`leave_modal_${type}`)
-        .setTitle(`40 FPS • ${LEAVE_TYPES[type].replace(/^.\s/, "")}`);
-
-      const icName = new TextInputBuilder()
-        .setCustomId("ic_name")
-        .setLabel("ชื่อตัวละคร (IC)")
-        .setPlaceholder("เช่น John Wick")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true)
-        .setMaxLength(50);
-
-      const date = new TextInputBuilder()
-        .setCustomId("date")
-        .setLabel("วันที่ลา")
-        .setPlaceholder("เช่น 28/09/2026")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true)
-        .setMaxLength(20);
-
-      const arrival = new TextInputBuilder()
-        .setCustomId("arrival")
-        .setLabel("เวลาเข้าเมืองโดยประมาณ")
-        .setPlaceholder("เช่น 21:00 / หลัง 22:00 / ไม่แน่นอน")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true)
-        .setMaxLength(40);
-
-      const reason = new TextInputBuilder()
-        .setCustomId("reason")
-        .setLabel("เหตุผล")
-        .setPlaceholder("เช่น ติดธุระ / ทำงาน / ไม่สะดวกเข้าเมือง")
-        .setStyle(TextInputStyle.Paragraph)
-        .setRequired(true)
-        .setMaxLength(300);
-
-      modal.addComponents(
-        new ActionRowBuilder().addComponents(icName),
-        new ActionRowBuilder().addComponents(date),
-        new ActionRowBuilder().addComponents(arrival),
-        new ActionRowBuilder().addComponents(reason)
-      );
-
-      await interaction.showModal(modal);
-      return;
-    }
-
-    if (interaction.isModalSubmit() && interaction.customId.startsWith("leave_modal_")) {
-      const type = interaction.customId.replace("leave_modal_", "");
-      const leaveType = LEAVE_TYPES[type] || "ไม่ระบุ";
-
-      const icName = interaction.fields.getTextInputValue("ic_name");
-      const date = interaction.fields.getTextInputValue("date");
-      const arrival = interaction.fields.getTextInputValue("arrival");
-      const reason = interaction.fields.getTextInputValue("reason");
-
-      const review = interaction.guild.channels.cache.find(
-        c => c.type === ChannelType.GuildText && c.name === "🔍・ตรวจสอบการลา"
-      );
-
-      if (!review) {
-        return interaction.reply({
-          content: "❌ ยังไม่ได้ติดตั้งระบบเซิร์ฟเวอร์ ให้ Staff ใช้ /setup-server ก่อน",
-          ephemeral: true
-        });
+        return interaction.showModal(modal);
       }
-
-      const embed = new EmbedBuilder()
-        .setTitle("📝 ใบลาใหม่ | 40 FPS GANG")
-        .setDescription("**สถานะ:** 🟡 รอตรวจสอบ")
-        .addFields(
-          { name: "👤 ชื่อตัวละคร (IC)", value: icName, inline: true },
-          { name: "📌 ประเภทการลา", value: leaveType, inline: true },
-          { name: "📅 วันที่ลา", value: date, inline: true },
-          { name: "⏰ เวลาเข้าเมืองโดยประมาณ", value: arrival, inline: true },
-          { name: "📝 เหตุผล", value: reason, inline: false },
-          { name: "💬 Discord ติดต่อกลับ", value: `<@${interaction.user.id}>`, inline: false },
-          { name: "👤 ผู้แจ้ง", value: `${interaction.user}`, inline: false }
-        )
-        .setFooter({ text: "40 FPS GANG • Leave System" })
-        .setTimestamp();
-
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`approve_leave_${interaction.user.id}`)
-          .setLabel("🟢 อนุมัติ")
-          .setStyle(ButtonStyle.Success),
-        new ButtonBuilder()
-          .setCustomId(`reject_leave_${interaction.user.id}`)
-          .setLabel("🔴 ไม่อนุมัติ")
-          .setStyle(ButtonStyle.Danger)
-      );
-
-      await review.send({ embeds: [embed], components: [row] });
-
-      await interaction.reply({
-        content: "✅ ส่งใบลาเรียบร้อยแล้ว\nรอหัวหน้า/Staff ตรวจสอบในห้องตรวจสอบการลา",
-        ephemeral: true
-      });
-      return;
+      if (id === "story_join") {
+        const story = db.stories.at(-1);
+        if (!story) return interaction.reply({ content: "ยังไม่มีแบบสำรวจสตอรี่", ephemeral: true });
+        story.participants ||= [];
+        if (!story.participants.includes(interaction.user.id)) story.participants.push(interaction.user.id);
+        saveDb();
+        return interaction.reply({ content: `🙋 ลงชื่อเข้าร่วมสตอรี่ล่าสุดแล้ว\n${story.when} — ${story.playing}`, ephemeral: true });
+      }
+      if (id === "bank_view") return interaction.reply({ content: `💰 ยอดเงินแก๊ง: ${Number(db.bank.balance).toLocaleString("th-TH")} บาท`, ephemeral: true });
+      if (id === "bank_add" || id === "bank_subtract") {
+        if (!isManager(interaction.member)) return interaction.reply({ content: "เฉพาะหัวหน้า/รองหัวหน้าเท่านั้น", ephemeral: true });
+        return interaction.showModal(amountModal(id === "bank_add" ? "bank_add_submit" : "bank_subtract_submit", id === "bank_add" ? "เพิ่มเงินแก๊ง" : "หักเงินแก๊ง", "จำนวนเงิน"));
+      }
+      if (id === "loop_open") return interaction.reply({ content: "เลือกสมาชิกเพื่อเพิ่ม 1 คะแนน", components: [memberSelect("loop_member_select", "เลือกสมาชิก", interaction.guild)], ephemeral: true });
+      if (id === "loop_view") {
+        const lines = Object.entries(db.loop).sort((a,b) => b[1]-a[1]).map(([uid, pts], i) => `${i+1}. <@${uid}> — ${pts} คะแนน`);
+        return interaction.reply({ content: lines.join("\n") || "ยังไม่มีคะแนน", ephemeral: true });
+      }
+      if (id === "loop_reset") {
+        if (!isManager(interaction.member)) return interaction.reply({ content: "เฉพาะหัวหน้า/รองหัวหน้าเท่านั้น", ephemeral: true });
+        db.loop = {}; saveDb();
+        return interaction.reply({ content: "♻️ รีเซ็ตคะแนน King of Loop แล้ว", ephemeral: true });
+      }
     }
 
-    if (
-      interaction.isButton() &&
-      (interaction.customId.startsWith("approve_leave_") ||
-       interaction.customId.startsWith("reject_leave_"))
-    ) {
-      if (!hasStaffAccess(interaction.member)) {
-        return interaction.reply({
-          content: "❌ คุณไม่มีสิทธิ์ตรวจสอบใบลา",
-          ephemeral: true
-        });
-      }
-
-      const approved = interaction.customId.startsWith("approve_leave_");
-      const targetId = interaction.customId.split("_").pop();
-
-      const oldEmbed = interaction.message.embeds[0];
-      const embed = EmbedBuilder.from(oldEmbed)
-        .setDescription(`**สถานะ:** ${approved ? "🟢 อนุมัติแล้ว" : "🔴 ไม่อนุมัติ"}`)
-        .addFields({
-          name: "👑 ผู้ตรวจสอบ",
-          value: `${interaction.user}`,
-          inline: false
-        });
-
-      const disabledRow = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId("leave_done")
-          .setLabel(approved ? "🟢 อนุมัติแล้ว" : "🔴 ไม่อนุมัติ")
-          .setStyle(approved ? ButtonStyle.Success : ButtonStyle.Danger)
-          .setDisabled(true)
-      );
-
-      await interaction.update({ embeds: [embed], components: [disabledRow] });
-
-      const logChannel = interaction.guild.channels.cache.find(
-        c => c.type === ChannelType.GuildText && c.name === "📑・LOG"
-      );
-
-      if (logChannel) {
-        await logChannel.send(
-          `${approved ? "🟢" : "🔴"} ใบลา${approved ? "อนุมัติ" : "ไม่อนุมัติ"} | ผู้ตรวจสอบ: ${interaction.user} | ผู้แจ้ง: <@${targetId}>`
+    if (interaction.isStringSelectMenu()) {
+      if (interaction.customId === "welfare_select") {
+        const item = interaction.values[0], list = db.welfare[item] || [];
+        const has = list.includes(interaction.user.id);
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`welfare_toggle:${encodeURIComponent(item)}`).setLabel(has ? "ยกเลิกการครอบครอง" : "ลงทะเบียนครอบครอง").setStyle(has ? ButtonStyle.Danger : ButtonStyle.Success)
         );
+        return interaction.update({ content: `🎒 **${item}**\nจำนวนผู้ลงทะเบียน: ${list.length}\nรายชื่อ: ${list.map(id => `<@${id}>`).join(", ") || "ยังไม่มี"}`, components: [row] });
       }
-
-      try {
-        const user = await client.users.fetch(targetId);
-        await user.send(
-          `📋 **ผลการแจ้งลา 40 FPS GANG**\n\n` +
-          `${approved ? "🟢 ใบลาของคุณได้รับการอนุมัติแล้ว" : "🔴 ใบลาของคุณไม่ได้รับการอนุมัติ"}\n` +
-          `ตรวจสอบโดย: ${interaction.user}`
-        );
-      } catch (_) {}
+      if (interaction.customId === "loop_member_select") {
+        const uid = interaction.values[0];
+        if (uid === "none") return interaction.reply({ content: "ไม่พบสมาชิก", ephemeral: true });
+        db.loop[uid] = (db.loop[uid] || 0) + 1; saveDb();
+        return interaction.update({ content: `🏆 เพิ่ม 1 คะแนนให้ <@${uid}> แล้ว รวม ${db.loop[uid]} คะแนน`, components: [] });
+      }
     }
-  } catch (err) {
-    console.error(err);
+
+    if (interaction.isButton() && interaction.customId.startsWith("welfare_toggle:")) {
+      const item = decodeURIComponent(interaction.customId.split(":")[1]);
+      db.welfare[item] ||= [];
+      const list = db.welfare[item], idx = list.indexOf(interaction.user.id);
+      if (idx >= 0) list.splice(idx, 1); else list.push(interaction.user.id);
+      saveDb();
+      return interaction.reply({ content: `${idx >= 0 ? "ยกเลิก" : "ลงทะเบียน"} **${item}** แล้ว\nจำนวนปัจจุบัน: ${list.length}`, ephemeral: true });
+    }
+
+    if (interaction.isModalSubmit()) {
+      if (interaction.customId === "leave_submit") {
+        const entry = { userId: interaction.user.id, reason: interaction.fields.getTextInputValue("reason"), duration: interaction.fields.getTextInputValue("duration"), contact: interaction.fields.getTextInputValue("contact"), status: "รออนุมัติ", at: new Date().toISOString() };
+        db.leaves[todayKey()] ||= []; db.leaves[todayKey()].push(entry); saveDb();
+        const channel = await findTextChannel(interaction.guild, "📝・แจ้งลาพีคไทม์");
+        if (channel) await channel.send({ embeds: [new EmbedBuilder().setColor(0xE5A33D).setTitle("📝 คำขอลาพีคไทม์").setDescription(`ผู้ลา: <@${entry.userId}>\nเหตุผล: ${entry.reason}\nระยะเวลา: ${entry.duration}\nติดต่อ: ${entry.contact || "-"}\nสถานะ: ${entry.status}`)], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId("leave_approve").setLabel("อนุมัติ").setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId("leave_reject").setLabel("ไม่อนุมัติ").setStyle(ButtonStyle.Danger))] });
+        return interaction.reply({ content: "ส่งคำขอลาแล้ว รอหัวหน้า/รองหัวหน้าอนุมัติ", ephemeral: true });
+      }
+      if (interaction.customId === "story_create") {
+        const story = { id: Date.now(), creator: interaction.user.id, when: interaction.fields.getTextInputValue("when"), playing: interaction.fields.getTextInputValue("playing"), participants: [interaction.user.id] };
+        db.stories.push(story); saveDb();
+        const channel = await findTextChannel(interaction.guild, "📋・สำรวจคนเล่นสตอรี่");
+        if (channel) await channel.send({ embeds: [new EmbedBuilder().setColor(0x7C5CE7).setTitle("📖 สำรวจคนเล่นสตอรี่").setDescription(`ผู้สร้าง: <@${story.creator}>\nวันเวลา: ${story.when}\nเล่นกับใคร/รายละเอียด: ${story.playing}\nผู้เข้าร่วม: <@${story.creator}>`)], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId("story_join").setLabel("🙋 เข้าร่วม").setStyle(ButtonStyle.Success))] });
+        const dm = await sendMemberDMs(interaction.guild, `📖 มีแบบสำรวจสตอรี่ใหม่!\nวันเวลา: ${story.when}\nรายละเอียด: ${story.playing}\nไปที่ห้อง 📋・สำรวจคนเล่นสตอรี่ ใน Discord เพื่อเข้าร่วม`);
+        return interaction.reply({ content: `สร้างแบบสำรวจแล้ว • DM สำเร็จ ${dm.ok} คน • ส่งไม่สำเร็จ ${dm.failed} คน${dm.reason ? ` • ${dm.reason}` : ""}`, ephemeral: true });
+      }
+      if (interaction.customId === "bank_add_submit" || interaction.customId === "bank_subtract_submit") {
+        if (!isManager(interaction.member)) return interaction.reply({ content: "ไม่มีสิทธิ์จัดการบัญชี", ephemeral: true });
+        const amount = Number(interaction.fields.getTextInputValue("amount").replace(/,/g, ""));
+        const note = interaction.fields.getTextInputValue("note") || "-";
+        if (!Number.isFinite(amount) || amount <= 0) return interaction.reply({ content: "กรุณาใส่จำนวนเงินเป็นตัวเลขมากกว่า 0", ephemeral: true });
+        const sign = interaction.customId === "bank_add_submit" ? 1 : -1;
+        if (db.bank.balance + amount * sign < 0) return interaction.reply({ content: "ยอดเงินไม่เพียงพอ", ephemeral: true });
+        db.bank.balance += amount * sign;
+        db.bank.ledger.push({ userId: interaction.user.id, amount: amount * sign, note, at: new Date().toISOString() }); saveDb();
+        return interaction.reply({ content: `บันทึกแล้ว ${sign > 0 ? "รายรับ" : "รายจ่าย"} ${amount.toLocaleString("th-TH")} บาท\nยอดคงเหลือ ${db.bank.balance.toLocaleString("th-TH")} บาท`, ephemeral: true });
+      }
+    }
+  } catch (e) {
+    console.error("Interaction error:", e);
+    const msg = "เกิดข้อผิดพลาดระหว่างทำรายการ กรุณาตรวจสอบ Console ของบอท";
     if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
-      await interaction.reply({
-        content: "❌ เกิดข้อผิดพลาด กรุณาติดต่อ Staff",
-        ephemeral: true
-      });
+      try { await interaction.reply({ content: msg, ephemeral: true }); } catch {}
     }
   }
 });
 
-client.login(process.env.DISCORD_TOKEN);
+client.login(cfg.token);

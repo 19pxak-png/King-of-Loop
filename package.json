@@ -1,13 +1,9 @@
 {
-  "name": "40fps-gang-bot",
+  "name": "40fps-gang-system",
   "version": "3.0.0",
-  "description": "40 FPS Gang Discord Bot - server setup, leave approval, Kind of Loop evidence and leaderboard",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
-  },
-  "dependencies": {
-    "discord.js": "^14.24.2",
-    "dotenv": "^16.6.1"
-  }
+  "description": "40 FPS Gang Discord bot for Pterodactyl",
+  "main": "src/index.js",
+  "scripts": { "start": "node src/index.js" },
+  "engines": { "node": ">=20.0.0" },
+  "dependencies": { "discord.js": "^14.19.3", "dotenv": "^16.4.7" }
 }
